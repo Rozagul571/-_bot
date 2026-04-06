@@ -1,9 +1,12 @@
-import asyncio
-from typing import Optional
+"""
+monitor.py — Real-time Telethon event listener.
+Yangi post kelganda bir marta ishlaydi. Polling yo'q.
+"""
 
+import re
+from typing import Optional
 from telethon import TelegramClient, events
-from telethon.tl.types import Message
-from telethon.errors import FloodWaitError, RPCError
+from telethon.tl.types import Message, MessageEntityUrl, MessageEntityTextUrl
 from loguru import logger
 
 from core.config import settings
@@ -11,7 +14,7 @@ from services.database import Database
 from services.filter import ContentFilter
 from services.translator import Translator
 from services.poster import ChannelPoster
-from utils.link_extractor import LinkExtractor
+from services.fetcher import fetch_url_content
 
 
 class ChannelMonitor:
@@ -20,186 +23,137 @@ class ChannelMonitor:
         db: Database,
         content_filter: ContentFilter,
         translator: Translator,
-        poster: ChannelPoster
-    ):
-        self._db = db
-        self._filter = content_filter
+        poster: ChannelPoster,
+    ) -> None:
+        self._db         = db
+        self._filter     = content_filter
         self._translator = translator
-        self._poster = poster
-        self._link_extractor = LinkExtractor()
-        self._running = False
+        self._poster     = poster
 
-        # User client
         self._client = TelegramClient(
-            session=settings.get_session_path(),
+            session=settings.user_session(),
             api_id=settings.TELEGRAM_API_ID,
             api_hash=settings.TELEGRAM_API_HASH,
-            flood_sleep_threshold=60,
-            connection_retries=5
         )
 
     async def start(self) -> None:
-        """Start monitoring"""
         await self._client.start(phone=settings.TELEGRAM_PHONE)
         me = await self._client.get_me()
-        logger.info(f"✅ User connected: @{me.username or me.first_name}")
+        logger.info(f"User ulandi: @{me.username or me.first_name}")
 
     async def stop(self) -> None:
-        """Stop monitoring"""
-        self._running = False
-        if self._client and self._client.is_connected():
+        if self._client.is_connected():
             await self._client.disconnect()
-        logger.info("✅ Monitor stopped")
 
     async def run(self) -> None:
-        """Run monitor with polling"""
-        self._running = True
         await self.start()
+        stats = await self._db.get_stats()
+        logger.info(f"DB holati: {stats}")
 
-        logger.info(f"👀 Monitoring: @{settings.SOURCE_CHANNEL}")
-        logger.info(f"⏱️ Polling every {settings.POLL_INTERVAL_SECONDS}s")
+        @self._client.on(events.NewMessage(chats=settings.SOURCE_CHANNEL))
+        async def on_new_post(event: events.NewMessage.Event) -> None:
+            logger.info(f"⚡ Yangi post: #{event.message.id}")
+            await self._handle(event.message)
 
-        last_message_id = 0
+        logger.info(f"✅ Listening: @{settings.SOURCE_CHANNEL}")
+        logger.info("Yangi post kelganda bir marta ishlaydi...")
+        await self._client.run_until_disconnected()
 
-        while self._running:
-            try:
-                # Get channel
-                try:
-                    channel = await self._client.get_entity(settings.SOURCE_CHANNEL)
-                except Exception as e:
-                    logger.error(f"❌ Cannot get channel: {e}")
-                    await asyncio.sleep(60)
-                    continue
+    async def _handle(self, msg: Message) -> None:
+        mid  = msg.id
+        text = _get_text(msg)
+        link = _get_link(msg)
 
-                # Get messages
-                messages = await self._client.get_messages(
-                    channel,
-                    limit=settings.FETCH_LIMIT
-                )
+        logger.info(f"#{mid} | {len(text)} belgi | link={'bor' if link else 'yoq'}")
 
-                # Process newest first
-                for msg in messages:
-                    if msg.id <= last_message_id:
-                        continue
-
-                    if await self._db.is_processed(msg.id):
-                        last_message_id = max(last_message_id, msg.id)
-                        continue
-
-                    await self._process_message(msg)
-                    last_message_id = max(last_message_id, msg.id)
-
-                # Wait for next poll
-                for _ in range(settings.POLL_INTERVAL_SECONDS):
-                    if not self._running:
-                        break
-                    await asyncio.sleep(1)
-
-            except FloodWaitError as e:
-                logger.warning(f"⏳ Flood wait: {e.seconds}s")
-                await asyncio.sleep(e.seconds + 5)
-            except Exception as e:
-                logger.error(f"❌ Polling error: {e}")
-                await asyncio.sleep(30)
-
-    async def _process_message(self, msg: Message) -> None:
-        """Process single message"""
-        msg_id = msg.id
-        text = msg.text or msg.message or ""
-        link = self._link_extractor.extract(msg)
-
-        logger.info(f"📨 [#{msg_id}] Processing | {len(text)} chars")
-
-        # Skip empty
-        if not text and not link:
-            logger.info(f"⏭️ [#{msg_id}] Empty message")
+        # 1. Dublikat — bir marta
+        if await self._db.is_processed(mid):
+            logger.info(f"#{mid} allaqachon ishlangan — skip")
             return
 
-        # Check length
+        # 2. Juda qisqa
         if len(text.strip()) < settings.MIN_TEXT_LENGTH and not link:
-            logger.info(f"⏭️ [#{msg_id}] Too short ({len(text)} chars)")
-            await self._db.save(
-                message_id=msg_id,
-                channel=settings.SOURCE_CHANNEL,
-                original_text=text,
-                link=link,
-                is_relevant=False,
-                skip_reason="too_short"
-            )
+            logger.info(f"#{mid} juda qisqa — skip")
+            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
+                                original_text=text, is_relevant=False, skip_reason="qisqa")
             return
 
-        # Russian check
+        # 3. Rus tilida emas
         if text and not self._filter.is_russian(text):
-            logger.info(f"⏭️ [#{msg_id}] Not Russian")
-            await self._db.save(
-                message_id=msg_id,
-                channel=settings.SOURCE_CHANNEL,
-                original_text=text,
-                link=link,
-                is_relevant=False,
-                skip_reason="not_russian"
-            )
+            logger.info(f"#{mid} rus tilida emas — skip")
+            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
+                                original_text=text, is_relevant=False, skip_reason="rus_emas")
             return
 
-        # Keyword filter
-        if text and not self._filter.is_relevant(text):
-            logger.info(f"⏭️ [#{msg_id}] No keywords")
-            await self._db.save(
-                message_id=msg_id,
-                channel=settings.SOURCE_CHANNEL,
-                original_text=text,
-                link=link,
-                is_relevant=False,
-                skip_reason="no_keywords"
-            )
+        # 4. Kalit so'z filtri (bepul)
+        if not self._filter.is_relevant(text or link or ""):
+            logger.info(f"#{mid} kalit so'z yo'q — skip")
+            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
+                                original_text=text, is_relevant=False, skip_reason="kalit_yoq")
             return
 
-        # AI relevance check
+        # 5. AI relevantlik
         if text and not await self._translator.is_relevant(text):
-            logger.info(f"⏭️ [#{msg_id}] AI: not relevant")
-            await self._db.save(
-                message_id=msg_id,
-                channel=settings.SOURCE_CHANNEL,
-                original_text=text,
-                link=link,
-                is_relevant=False,
-                skip_reason="ai_not_relevant"
-            )
+            logger.info(f"#{mid} AI: tegishli emas — skip")
+            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
+                                original_text=text, is_relevant=False, skip_reason="ai_skip")
             return
 
-        # Translate and create media post
+        # 6. Link mazmunini o'qi
+        link_content: Optional[str] = None
+        if link:
+            logger.info(f"#{mid} link o'qilmoqda: {link[:70]}")
+            link_content = await fetch_url_content(link)
+            if link_content:
+                logger.info(f"#{mid} link mazmuni: {len(link_content)} belgi")
+
+        # 7. Post yaratish
         try:
-            media_post = await self._translator.create_post(text, link)
-            logger.info(f"🔄 [#{msg_id}] Translation + Media post created")
-        except Exception as e:
-            logger.error(f"❌ [#{msg_id}] Translation failed: {e}")
-            await self._db.save(
-                message_id=msg_id,
-                channel=settings.SOURCE_CHANNEL,
-                original_text=text,
-                link=link,
-                error=f"translation_failed: {str(e)[:100]}"
+            post_text = await self._translator.create_post(
+                telegram_text=text,
+                link_content=link_content,
             )
+        except Exception as exc:
+            logger.error(f"#{mid} post yaratish xato: {exc}")
+            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
+                                original_text=text, error=str(exc))
             return
 
-        # Post to channel
-        try:
-            posted = await self._poster.post(media_post)
-            logger.info(f"📤 [#{msg_id}] Posted: {posted}")
-        except Exception as e:
-            logger.error(f"❌ [#{msg_id}] Posting failed: {e}")
-            posted = False
+        # 8. Kanalga yuborish — bool qaytaradi
+        posted: bool = await self._poster.post(post_text, link=link)
 
-        # Save to database
+        # 9. DB ga saqlash
         await self._db.save(
-            message_id=msg_id,
+            message_id=mid,
             channel=settings.SOURCE_CHANNEL,
             original_text=text,
-            translated_text=translated,
-            link=link,
+            translated_text=post_text,
             is_relevant=True,
-            posted=posted,
-            error=None if posted else "posting_failed"
+            posted=posted,            # bu har doim True yoki False
+            error=None if posted else "post_xato",
         )
+        logger.info(f"#{mid} yakunlandi | {'✅ OK' if posted else '❌ XATO'}")
 
-        logger.info(f"✅ [#{msg_id}] Complete | Posted: {posted}")
+
+def _get_text(msg: Message) -> str:
+    return (msg.text or msg.message or "").strip()
+
+
+def _get_link(msg: Message) -> Optional[str]:
+    for ent in msg.entities or []:
+        if isinstance(ent, MessageEntityTextUrl):
+            return ent.url
+        if isinstance(ent, MessageEntityUrl):
+            txt = msg.text or ""
+            return txt[ent.offset: ent.offset + ent.length]
+    if msg.reply_markup:
+        try:
+            for row in msg.reply_markup.rows:
+                for btn in row.buttons:
+                    if hasattr(btn, "url") and btn.url:
+                        return btn.url
+        except Exception:
+            pass
+    raw = msg.text or msg.message or ""
+    m = re.search(r"https?://[^\s\)\]\>\"\']+", raw, re.I)
+    return m.group(0) if m else None

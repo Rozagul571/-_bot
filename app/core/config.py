@@ -1,66 +1,43 @@
-from functools import lru_cache
+import os
 from pathlib import Path
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from functools import lru_cache
+from pydantic import Field
+from pydantic_settings import BaseSettings
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+DATA_DIR = Path(os.getenv("DATA_DIR", str(_ROOT / "data")))
+LOG_DIR  = Path(os.getenv("LOG_DIR",  str(_ROOT / "logs")))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class Settings(BaseSettings):
+    TELEGRAM_API_ID: int       = Field(...)
+    TELEGRAM_API_HASH: str     = Field(...)
+    TELEGRAM_PHONE: str        = Field(...)
+    TELEGRAM_BOT_TOKEN: str    = Field(...)
+    SOURCE_CHANNEL: str        = Field(...)
+    TARGET_CHANNEL: str        = Field(...)
+    OPENAI_API_KEY: str        = Field(...)
+    OPENAI_MODEL: str          = Field(default="llama-3.3-70b-versatile")
+    MAX_RETRIES: int           = Field(default=3)
+    RETRY_DELAY_SECONDS: int   = Field(default=10)
+    MIN_TEXT_LENGTH: int       = Field(default=30)
+    FETCH_LIMIT: int           = Field(default=20)
+    LOG_LEVEL: str             = Field(default="INFO")
 
-    # -------- TELEGRAM --------
-    TELEGRAM_API_ID: int
-    TELEGRAM_API_HASH: str
-    TELEGRAM_PHONE: str
-    TELEGRAM_BOT_TOKEN: str
+    class Config:
+        env_file = str(_ROOT / ".env")
+        env_file_encoding = "utf-8"
 
-    SOURCE_CHANNEL: str
-    TARGET_CHANNEL: str
+    def db_url(self)       -> str: return f"sqlite+aiosqlite:///{DATA_DIR / 'pipeline.db'}"
+    def user_session(self) -> str: return str(DATA_DIR / "user_session")
+    def bot_session(self)  -> str: return str(DATA_DIR / "bot_session")
+    def log_file(self)     -> str: return str(LOG_DIR  / "pipeline.log")
 
-    # -------- OPENAI --------
-    OPENAI_API_KEY: str
-    OPENAI_MODEL: str = "gpt-4o-mini"
 
-    # -------- DATABASE --------
-    DATABASE_URL: str = "sqlite+aiosqlite:///./data/pipeline.db"
-
-    # -------- PIPELINE --------
-    POLL_INTERVAL_SECONDS: int = 60
-    FETCH_LIMIT: int = 30
-    MAX_RETRIES: int = 3
-    RETRY_DELAY_SECONDS: int = 5
-    MIN_TEXT_LENGTH: int = 20
-
-    # -------- LOGGING --------
-    LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "./logs/pipeline.log"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        case_sensitive=True,
-        extra="ignore"
-    )
-
-    @field_validator("SOURCE_CHANNEL", "TARGET_CHANNEL")
-    def clean_channel_name(cls, v: str) -> str:
-        v = v.replace("https://t.me/", "").replace("t.me/", "")
-        return v.lstrip("@")
-
-    def get_session_path(self) -> str:
-        path = Path("./data/user_session")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return str(path)
-
-    def get_bot_session_path(self) -> str:
-        path = Path("./data/bot_session")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return str(path)
-
-    def get_database_url(self) -> str:
-        """Return database URL"""
-        return self.DATABASE_URL
-
-@lru_cache
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-
 
 settings = get_settings()

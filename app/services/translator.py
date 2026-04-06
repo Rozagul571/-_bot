@@ -7,48 +7,70 @@ from core.config import settings
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
-_RELEVANCE_SYSTEM = """Siz O'zbekiston davlat xaridlari mutaxassisisiz.
-Faqat "HA" yoki "YOQ" deb javob bering.
-HA: davlat xaridlari, tender, qonun, shartnoma, portal, byudjet, etkazib beruvchi.
-YOQ: reklama, sport, ko'ngilochar, boshqa mavzular."""
+_RELEVANCE_SYSTEM = (
+    "Siz O'zbekiston davlat xaridlari va qonunchilik mutaxassisisiz.\n"
+    "Faqat 'HA' yoki 'YOQ' deb javob bering.\n"
+    "HA: davlat xaridlari, tender, qonun, farmon, qaror, normativ hujjat, "
+    "shartnoma, soliq, tarif, byudjet, davlat xizmatlari, litsenziya, jarima.\n"
+    "YOQ: reklama, sport, siyosat, shaxsiy hayot, ko'ngilochar kontent.\n"
+    "Faqat bitta so'z yoz."
+)
 
-_POST_SYSTEM = """Siz O'zbekiston davlat xaridlari sohasidagi professional media muharriri va tarjimonsiz.
-Rus tilidagi davlat xaridlari ma'lumotini o'zbek tiliga o'girib Telegram uchun ideal post yarat.
+_POST_SYSTEM = (
+    "Sen ikkita rolni birgalikda bajarasan:\n\n"
+    "ROL 1 - Senior O'zbek Qonunshunos:\n"
+    "  Qonun raqami, yil va kuchga kirish sanasini aniqla.\n"
+    "  Kim uchun ta'sir qilishini batafsil yoz.\n"
+    "  Amaliy oqibatlar, muddatlar, jarimalarni ko'rsat.\n\n"
+    "ROL 2 - Senior Copywriter:\n"
+    "  Murakkab qonuniy matnni oddiy, jonli, tushunarli tilga o'gir.\n"
+    "  To'g'ridan-to'g'ri tarjima emas, tushuntirish yoz.\n"
+    "  Hamma narsa shu postda bolsin, hech qayerga yonaltirma.\n\n"
+    "TIL QOIDALARI (QATTIQ):\n"
+    "  Faqat sof o'zbek tili, birorta ruscha soz ishlatma.\n"
+    "  Taqiqlangan: tender, zakupka, zakup, rejestr, portal, konkurs,\n"
+    "  operator, kontragent, yuridik shaxs, fizik shaxs.\n"
+    "  To'g'ri: davlat xaridi, tanlov, royxat, xizmat korsatuvchi,\n"
+    "  buyurtmachi, yetkazib beruvchi, shartnoma, tashkilot, fuqaro.\n\n"
+    "FORMAT (majburiy):\n"
+    "  emoji [Qisqa sarlavha]\n\n"
+    "  [Yangilik nima - 2 gap]\n\n"
+    "  [Kim uchun muhim - 2-3 gap]\n\n"
+    "  [Nima ozgaradi, raqamlar, muddatlar - 2-3 gap]\n\n"
+    "  [Nima qilish kerak - 1-2 gap]\n\n"
+    "  [Qonun raqami va kuchga kirish sanasi]\n\n"
+    "QATTIQ TAQIQLAR:\n"
+    "  HECH QANDAY havola berma (sayt, manba, qollanma).\n"
+    "  'Batafsil oqung', 'havolaga oting', 'qollanma bilan tanishing' dema.\n"
+    "  Ruscha soz ishlatma.\n"
+    "  Emoji: 2-3 ta (faqat emojidan biri: 📌 ⚡ ✅ ⚠️ 📋).\n"
+    "  Uzunlik: 180-280 soz."
+)
 
-QOIDALAR:
-1. Faqat o'zbek tilida (lotin, rasmiy uslub).
-2. Oddiy, tushunarli til.
-3. Atamalar: zakupka=xarid/tender, zakazchik=buyurtmachi, postavshchik=yetkazib beruvchi,
-   konkurs=tanlov, auktsion=kim oshdi savdosi, kontrakt=shartnoma, reestr=royxat.
-4. Struktura: sarlavha + asosiy fikr + nima qilish kerak + muhim sana/raqam.
-5. 3-5 ta emoji ishlat.
-6. URL larni o'zgartirma.
-7. Faqat tayyor post matni."""
+_WITH_LINK = (
+    "TELEGRAM POST (manba ma'lumoti):\n{telegram_text}\n\n"
+    "QO'SHIMCHA MA'LUMOT (link mazmuni — faqat o'zing uchun, postda ko'rsatma):\n"
+    "{link_content}\n\n"
+    "Yuqoridagi barcha ma'lumotdan foydalanib, O'zbek auditoriyasi uchun "
+    "to'liq tushuntirilgan post yoz. Hamma kerakli ma'lumot postda bolsin. "
+    "Hech qayerga yonaltirma, hech qanday havola qoshma.\n\n"
+    "Faqat tayyor post matnini yoz:"
+)
 
-_POST_WITH_LINK = """Telegram post:
-{telegram_text}
-
-Havola mazmuni:
-{link_content}
-
-O'zbek tilidagi ideal Telegram post yarat. 5-8 gapdan oshmasin.
-Faqat post matnini yoz:"""
-
-_POST_NO_LINK = """Quyidagi rus tilidagi matndan o'zbek tilidagi ideal Telegram post yarat.
-Qisqa (3-6 gap), aniq, foydali. Sarlavha qoy.
-Faqat post matnini yoz:
-
-{text}"""
+_NO_LINK = (
+    "MATN:\n{text}\n\n"
+    "Ushbu ma'lumot asosida O'zbek auditoriyasi uchun "
+    "to'liq tushuntirilgan post yoz. Hamma kerakli ma'lumot postda bolsin. "
+    "Hech qayerga yonaltirma.\n\n"
+    "Faqat tayyor post matnini yoz:"
+)
 
 
 class Translator:
     def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile") -> None:
-        self._client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=GROQ_BASE_URL,
-        )
+        self._client = AsyncOpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
         self._model = model
-        logger.info(f"✅ Media Copywriter ishga tushdi | Model: {model}")
+        logger.info(f"Translator tayyor | Model: {model} | Groq API")
 
     async def is_relevant(self, text: str) -> bool:
         try:
@@ -56,33 +78,29 @@ class Translator:
                 model=self._model,
                 messages=[
                     {"role": "system", "content": _RELEVANCE_SYSTEM},
-                    {"role": "user", "content": text[:1000]},
+                    {"role": "user",   "content": text[:800]},
                 ],
                 temperature=0.0,
                 max_tokens=5,
             )
             answer = resp.choices[0].message.content.strip().upper()
             result = "HA" in answer
-            logger.info(f"Relevantlik: {answer} → {'TEGISHLI' if result else 'SKIP'}")
+            logger.info(f"Relevantlik: {answer} -> {'TEGISHLI' if result else 'SKIP'}")
             return result
         except Exception as exc:
-            logger.warning(f"Relevantlik xato: {exc}")
+            logger.warning(f"Relevantlik xato: {exc} -- tegishli deb otiladi")
             return True
 
-    async def create_post(
-        self,
-        telegram_text: str,
-        link_content: Optional[str] = None,
-    ) -> str:
-        if link_content and len(link_content) > 200:
-            prompt = _POST_WITH_LINK.format(
-                telegram_text=telegram_text[:1500],
-                link_content=link_content[:2500],
+    async def create_post(self, telegram_text: str, link_content: Optional[str] = None) -> str:
+        if link_content and len(link_content) > 150:
+            prompt = _WITH_LINK.format(
+                telegram_text=telegram_text[:1200],
+                link_content=link_content[:2800],
             )
-            logger.info("Post: telegram + link mazmunidan")
+            logger.info("Post rejimi: telegram + link mazmuni (link postda yoq)")
         else:
-            prompt = _POST_NO_LINK.format(text=telegram_text[:3000])
-            logger.info("Post: faqat telegram matnidan")
+            prompt = _NO_LINK.format(text=telegram_text[:3000])
+            logger.info("Post rejimi: faqat telegram matni")
 
         for attempt in range(1, settings.MAX_RETRIES + 1):
             try:
@@ -90,24 +108,34 @@ class Translator:
                     model=self._model,
                     messages=[
                         {"role": "system", "content": _POST_SYSTEM},
-                        {"role": "user", "content": prompt},
+                        {"role": "user",   "content": prompt},
                     ],
-                    temperature=0.3,
-                    max_tokens=1024,
+                    temperature=0.4,
+                    max_tokens=1200,
                 )
                 result = resp.choices[0].message.content.strip()
-                logger.info(f"Post yaratildi: {len(result)} belgi")
+                result = _remove_links(result)
+                logger.info(f"Post yaratildi: {len(result)} belgi (urinish {attempt})")
                 return result
             except Exception as exc:
                 wait = settings.RETRY_DELAY_SECONDS * attempt
-                logger.warning(f"Groq urinish {attempt}: {exc} — {wait}s")
+                logger.warning(f"Groq urinish {attempt}/{settings.MAX_RETRIES}: {exc} -- {wait}s")
                 if attempt < settings.MAX_RETRIES:
                     await asyncio.sleep(wait)
 
-        logger.error("Groq xato — asl matn qaytarildi")
+        logger.error("Groq xato -- asl matn qaytarildi")
         return telegram_text
 
 
+def _remove_links(text: str) -> str:
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(
+        r"(🔗|📎)?\s*(Batafsil|Manba|Havola|Ko'proq|Qo'shimcha)[:\s].*",
+        "", text, flags=re.IGNORECASE | re.MULTILINE,
+    )
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
 def extract_urls(text: str) -> list[str]:
-    pattern = re.compile(r"https?://[^\s\)\]\>\"\']+", re.IGNORECASE)
-    return pattern.findall(text)
+    return re.compile(r"https?://[^\s\)\]\>\"\']+", re.I).findall(text)
