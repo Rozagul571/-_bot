@@ -12,19 +12,27 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class Settings(BaseSettings):
-    TELEGRAM_API_ID: int       = Field(...)
-    TELEGRAM_API_HASH: str     = Field(...)
-    TELEGRAM_PHONE: str        = Field(...)
-    TELEGRAM_BOT_TOKEN: str    = Field(...)
-    SOURCE_CHANNEL: str        = Field(...)
-    TARGET_CHANNEL: str        = Field(...)
-    OPENAI_API_KEY: str        = Field(...)
-    OPENAI_MODEL: str          = Field(default="llama-3.3-70b-versatile")
-    MAX_RETRIES: int           = Field(default=3)
-    RETRY_DELAY_SECONDS: int   = Field(default=10)
-    MIN_TEXT_LENGTH: int       = Field(default=30)
-    FETCH_LIMIT: int           = Field(default=20)
-    LOG_LEVEL: str             = Field(default="INFO")
+    # Telegram User
+    TELEGRAM_API_ID: int     = Field(...)
+    TELEGRAM_API_HASH: str   = Field(...)
+    TELEGRAM_PHONE: str      = Field(...)
+    TELEGRAM_BOT_TOKEN: str  = Field(...)
+
+    # Kanallar — faqat .env da o'zgartiring
+    SOURCE_CHANNEL: str      = Field(default="goszakupki_uz")
+    TARGET_CHANNEL: str      = Field(...)
+
+    # AI — istalgan provider: OpenAI, Groq, yoki boshqa
+    AI_API_KEY: str          = Field(...)
+    AI_MODEL: str            = Field(default="gpt-4o-mini")
+    # OpenAI: https://api.openai.com/v1
+    # Groq:   https://api.groq.com/openai/v1
+    AI_BASE_URL: str         = Field(default="https://api.openai.com/v1")
+
+    # Runtime
+    MAX_RETRIES: int         = Field(default=3)
+    RETRY_DELAY_SECONDS: int = Field(default=10)
+    LOG_LEVEL: str           = Field(default="INFO")
 
     class Config:
         env_file = str(_ROOT / ".env")

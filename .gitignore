@@ -1,25 +1,28 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.sqlite3
-
-# Virtual env
-.venv/
+*.py[cod]
+*$py.class
+*.so
+.Python
 env/
 venv/
-
-# Logs
-*.log
-logs/
-data/
-
-# Docker
-*.env
-*.dockerignore
-docker-compose.override.yml
+.env
+.venv
+*.egg-info/
+dist/
+build/
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# Project specific
+data/
+logs/
+*.session
+*.session-journal
+
+# Docker
+*.pid

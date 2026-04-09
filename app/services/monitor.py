@@ -1,34 +1,30 @@
 """
-monitor.py — Real-time Telethon event listener.
-Yangi post kelganda bir marta ishlaydi. Polling yo'q.
+monitor.py — Real-time listener.
+1gz.uz/#/document linkli postlar — AVTOMATIK tegishli.
 """
 
 import re
 from typing import Optional
+
 from telethon import TelegramClient, events
 from telethon.tl.types import Message, MessageEntityUrl, MessageEntityTextUrl
 from loguru import logger
 
 from core.config import settings
 from services.database import Database
-from services.filter import ContentFilter
 from services.translator import Translator
 from services.poster import ChannelPoster
 from services.fetcher import fetch_url_content
 
+MIN_TEXT_LENGTH = 20
+OFFICIAL_DOMAIN = "1gz.uz"
+
 
 class ChannelMonitor:
-    def __init__(
-        self,
-        db: Database,
-        content_filter: ContentFilter,
-        translator: Translator,
-        poster: ChannelPoster,
-    ) -> None:
-        self._db         = db
-        self._filter     = content_filter
+    def __init__(self, db: Database, translator: Translator, poster: ChannelPoster) -> None:
+        self._db = db
         self._translator = translator
-        self._poster     = poster
+        self._poster = poster
 
         self._client = TelegramClient(
             session=settings.user_session(),
@@ -60,46 +56,34 @@ class ChannelMonitor:
         await self._client.run_until_disconnected()
 
     async def _handle(self, msg: Message) -> None:
-        mid  = msg.id
+        mid = msg.id
         text = _get_text(msg)
         link = _get_link(msg)
 
-        logger.info(f"#{mid} | {len(text)} belgi | link={'bor' if link else 'yoq'}")
+        # 1gz.uz rasmiy hujjat havolasimi?
+        is_official = bool(link and OFFICIAL_DOMAIN in link and "/document" in link)
 
-        # 1. Dublikat — bir marta
+        logger.info(
+            f"#{mid} | {len(text)} belgi | "
+            f"link={'bor' if link else 'yoq'} | "
+            f"rasmiy={'ha' if is_official else 'yoq'}"
+        )
+
+        # 1. Dublikat
         if await self._db.is_processed(mid):
             logger.info(f"#{mid} allaqachon ishlangan — skip")
             return
 
-        # 2. Juda qisqa
-        if len(text.strip()) < settings.MIN_TEXT_LENGTH and not link:
+        # 2. Juda qisqa (faqat link ham yo'q bo'lsa)
+        if len(text.strip()) < MIN_TEXT_LENGTH and not link:
             logger.info(f"#{mid} juda qisqa — skip")
-            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
-                                original_text=text, is_relevant=False, skip_reason="qisqa")
+            await self._db.save(
+                message_id=mid, channel=settings.SOURCE_CHANNEL,
+                original_text=text, is_relevant=False, skip_reason="qisqa",
+            )
             return
 
-        # 3. Rus tilida emas
-        if text and not self._filter.is_russian(text):
-            logger.info(f"#{mid} rus tilida emas — skip")
-            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
-                                original_text=text, is_relevant=False, skip_reason="rus_emas")
-            return
-
-        # 4. Kalit so'z filtri (bepul)
-        if not self._filter.is_relevant(text or link or ""):
-            logger.info(f"#{mid} kalit so'z yo'q — skip")
-            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
-                                original_text=text, is_relevant=False, skip_reason="kalit_yoq")
-            return
-
-        # 5. AI relevantlik
-        if text and not await self._translator.is_relevant(text):
-            logger.info(f"#{mid} AI: tegishli emas — skip")
-            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
-                                original_text=text, is_relevant=False, skip_reason="ai_skip")
-            return
-
-        # 6. Link mazmunini o'qi
+        # 3. Link mazmunini o'qi
         link_content: Optional[str] = None
         if link:
             logger.info(f"#{mid} link o'qilmoqda: {link[:70]}")
@@ -107,32 +91,47 @@ class ChannelMonitor:
             if link_content:
                 logger.info(f"#{mid} link mazmuni: {len(link_content)} belgi")
 
-        # 7. Post yaratish
-        try:
-            post_text = await self._translator.create_post(
-                telegram_text=text,
-                link_content=link_content,
+        # 4. AI: bitta so'rov — tekshiruv + post
+        logger.info(f"#{mid} AI ga yuborilmoqda...")
+        result = await self._translator.process(
+            telegram_text=text,
+            link_content=link_content,
+            has_1gz_link=is_official,
+        )
+
+        # 5. Tegishli emas
+        if not result["is_relevant"]:
+            logger.info(f"#{mid} AI: tegishli emas — skip")
+            await self._db.save(
+                message_id=mid, channel=settings.SOURCE_CHANNEL,
+                original_text=text, is_relevant=False, skip_reason="ai_skip",
             )
-        except Exception as exc:
-            logger.error(f"#{mid} post yaratish xato: {exc}")
-            await self._db.save(message_id=mid, channel=settings.SOURCE_CHANNEL,
-                                original_text=text, error=str(exc))
             return
 
-        # 8. Kanalga yuborish — bool qaytaradi
-        posted: bool = await self._poster.post(post_text, link=link)
+        # 6. Post bo'sh
+        post_text = result["post"]
+        if not post_text:
+            logger.warning(f"#{mid} AI post bo'sh")
+            await self._db.save(
+                message_id=mid, channel=settings.SOURCE_CHANNEL,
+                original_text=text, error="ai_post_empty",
+            )
+            return
 
-        # 9. DB ga saqlash
+        # 7. Kanalga yubor
+        posted: bool = await self._poster.post(post_text)
+
+        # 8. DB saqlash
         await self._db.save(
             message_id=mid,
             channel=settings.SOURCE_CHANNEL,
             original_text=text,
             translated_text=post_text,
             is_relevant=True,
-            posted=posted,            # bu har doim True yoki False
+            posted=posted,
             error=None if posted else "post_xato",
         )
-        logger.info(f"#{mid} yakunlandi | {'✅ OK' if posted else '❌ XATO'}")
+        logger.info(f"#{mid} yakunlandi | {'OK' if posted else 'XATO'}")
 
 
 def _get_text(msg: Message) -> str:

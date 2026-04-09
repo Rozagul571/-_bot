@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.env
+venv/
+.venv
+
+# Git
+.git/
+.gitignore
+
+# Data & Logs (mount qilinadi)
+data/
+logs/
+*.session
+*.session-journal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Docs
+README.md
+.gitignore
+.dockerignore
+emergency_auth.py

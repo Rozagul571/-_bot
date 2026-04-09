@@ -1,141 +1,190 @@
+"""
+translator.py — Bitta AI so'rovda:
+  1. Post normativ-huquqiy hujjatga tegishlimi?
+  2. Tegishli bo'lsa — to'liq, batafsil, professional o'zbek post yarat
+"""
+
 import asyncio
+import json
 import re
-from typing import Optional
+from typing import Optional, TypedDict
+
 from openai import AsyncOpenAI
 from loguru import logger
 from core.config import settings
 
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
-_RELEVANCE_SYSTEM = (
-    "Siz O'zbekiston davlat xaridlari va qonunchilik mutaxassisisiz.\n"
-    "Faqat 'HA' yoki 'YOQ' deb javob bering.\n"
-    "HA: davlat xaridlari, tender, qonun, farmon, qaror, normativ hujjat, "
-    "shartnoma, soliq, tarif, byudjet, davlat xizmatlari, litsenziya, jarima.\n"
-    "YOQ: reklama, sport, siyosat, shaxsiy hayot, ko'ngilochar kontent.\n"
-    "Faqat bitta so'z yoz."
-)
+class PostResult(TypedDict):
+    is_relevant: bool
+    post: str
 
-_POST_SYSTEM = (
-    "Sen ikkita rolni birgalikda bajarasan:\n\n"
-    "ROL 1 - Senior O'zbek Qonunshunos:\n"
-    "  Qonun raqami, yil va kuchga kirish sanasini aniqla.\n"
-    "  Kim uchun ta'sir qilishini batafsil yoz.\n"
-    "  Amaliy oqibatlar, muddatlar, jarimalarni ko'rsat.\n\n"
-    "ROL 2 - Senior Copywriter:\n"
-    "  Murakkab qonuniy matnni oddiy, jonli, tushunarli tilga o'gir.\n"
-    "  To'g'ridan-to'g'ri tarjima emas, tushuntirish yoz.\n"
-    "  Hamma narsa shu postda bolsin, hech qayerga yonaltirma.\n\n"
-    "TIL QOIDALARI (QATTIQ):\n"
-    "  Faqat sof o'zbek tili, birorta ruscha soz ishlatma.\n"
-    "  Taqiqlangan: tender, zakupka, zakup, rejestr, portal, konkurs,\n"
-    "  operator, kontragent, yuridik shaxs, fizik shaxs.\n"
-    "  To'g'ri: davlat xaridi, tanlov, royxat, xizmat korsatuvchi,\n"
-    "  buyurtmachi, yetkazib beruvchi, shartnoma, tashkilot, fuqaro.\n\n"
-    "FORMAT (majburiy):\n"
-    "  emoji [Qisqa sarlavha]\n\n"
-    "  [Yangilik nima - 2 gap]\n\n"
-    "  [Kim uchun muhim - 2-3 gap]\n\n"
-    "  [Nima ozgaradi, raqamlar, muddatlar - 2-3 gap]\n\n"
-    "  [Nima qilish kerak - 1-2 gap]\n\n"
-    "  [Qonun raqami va kuchga kirish sanasi]\n\n"
-    "QATTIQ TAQIQLAR:\n"
-    "  HECH QANDAY havola berma (sayt, manba, qollanma).\n"
-    "  'Batafsil oqung', 'havolaga oting', 'qollanma bilan tanishing' dema.\n"
-    "  Ruscha soz ishlatma.\n"
-    "  Emoji: 2-3 ta (faqat emojidan biri: 📌 ⚡ ✅ ⚠️ 📋).\n"
-    "  Uzunlik: 180-280 soz."
-)
 
-_WITH_LINK = (
-    "TELEGRAM POST (manba ma'lumoti):\n{telegram_text}\n\n"
-    "QO'SHIMCHA MA'LUMOT (link mazmuni — faqat o'zing uchun, postda ko'rsatma):\n"
-    "{link_content}\n\n"
-    "Yuqoridagi barcha ma'lumotdan foydalanib, O'zbek auditoriyasi uchun "
-    "to'liq tushuntirilgan post yoz. Hamma kerakli ma'lumot postda bolsin. "
-    "Hech qayerga yonaltirma, hech qanday havola qoshma.\n\n"
-    "Faqat tayyor post matnini yoz:"
-)
+_SYSTEM = """\
+Sen O'zbekiston qonunchilik va davlat xaridlari sohasidagi yurist va ekspertsan.
 
-_NO_LINK = (
-    "MATN:\n{text}\n\n"
-    "Ushbu ma'lumot asosida O'zbek auditoriyasi uchun "
-    "to'liq tushuntirilgan post yoz. Hamma kerakli ma'lumot postda bolsin. "
-    "Hech qayerga yonaltirma.\n\n"
-    "Faqat tayyor post matnini yoz:"
-)
+══════════════════════════════════════════════════
+VAZIFA 1 — TEKSHIRUV
+══════════════════════════════════════════════════
+
+Post quyidagi kategoriyalardan biriga tegishlimi?
+
+• Qonunlar (Oliy Majlis qabul qilgan)
+• Prezident farmonlari (PF-raqam)
+• Prezident qarorlari (PQ-raqam)
+• Vazirlar Mahkamasi qarorlari
+• Vazirlik buyruqlari va yo'riqnomalari
+• Davlat xaridlari qoidalari va o'zgarishlari
+• Soliq, tarif, to'lov, jarima o'zgarishlari
+• Litsenziya, ruxsatnoma qoidalari
+• 1gz.uz saytidan kelgan BARCHA hujjatlar
+
+AGAR TEGISHLI BO'LSA — {"is_relevant": true, "post": "..."}
+AGAR TEGISHLI BO'LMASA — {"is_relevant": false, "post": ""}
+
+══════════════════════════════════════════════════
+VAZIFA 2 — TO'LIQ BATAFSIL POST YARATISH
+══════════════════════════════════════════════════
+
+Sen hujjatni chuqur tahlil qilib, oddiy fuqaro ham, mutaxassis ham
+tushunadigan professional Telegram post yozasan.
+
+SARLAVHA QOIDASI:
+  Sarlavha — hujjatning ASOSIY MAVZUSI bo'lsin.
+  Hujjat raqami sarlavhada BO'LMASIN — faqat mazmun.
+  NOTO'G'RI: "PF-259 ga o'zgarish kiritildi"
+  TO'G'RI:   "Davlat xaridida jamoatchilik muhokamasi majburiy bo'ldi"
+  TO'G'RI:   "Litsenziya olish tartibi soddalashtirildi"
+  TO'G'RI:   "Soliq imtiyozlari bekor qilindi"
+
+POST TUZILMASI (MAJBURIY, shu tartibda):
+
+  🔥 [Diqqat tortadigan sarlavha — faqat mavzu, raqam yo'q]
+
+  [Qanday yangilik joriy qilindi — 2-3 gap, oddiy til]
+
+  ⚖️ Avval qanday edi?
+  [Ilgari qanday tartib bo'lganligi — 2-3 gap]
+
+  📋 Endi nima o'zgardi?
+  [Yangi tartib, qoidalar, majburiyatlar — 3-4 gap]
+
+  🔢 Qadam-baqadam jarayon:
+  1. [Birinchi qadam]
+  2. [Ikkinchi qadam]
+  3. [Uchinchi qadam]
+  (kerak bo'lsa davom ettir)
+
+  ❓ Nima uchun bu qoida kiritildi?
+  [Davlat maqsadi va sababi — 2-3 gap]
+
+  👥 Kim rioya qilishi shart?
+  [Aniq ro'yxat: tashkilotlar, mansabdorlar, fuqarolar]
+
+  ⚠️ Buzilsa nima bo'ladi?
+  [Jarima, oqibat, xavflar — 2-3 gap]
+
+  💡 Amaliy maslahat:
+  [Mutaxassislarga aniq ko'rsatma — 2-3 gap]
+
+  📌 Xulosa:
+  [Qisqa yakunlovchi fikr — 1-2 gap]
+
+  🗓 [Hujjat nomi va raqami] | Kuchga kirdi: [sana]
+
+TIL QOIDALARI (MAJBURIY):
+  Faqat sof o'zbek tili — birorta ruscha so'z bo'lmasin.
+  TAQIQLANGAN: tender, zakupka, zakup, rejestr, portal, konkurs,
+               operator, kontragent, yuridik shaxs, fizik shaxs,
+               otbor, dokumentatsiya (o'rniga: hujjat).
+  TO'G'RI: davlat xaridi, tanlov, ro'yxat, xizmat ko'rsatuvchi,
+           buyurtmachi, yetkazib beruvchi, shartnoma, tashkilot, fuqaro.
+
+QATTIQ TAQIQLAR:
+  ✗ Sayt nomi, URL, havola, 1gz.uz — hech qanday veb manzil qo'shma
+  ✗ "Batafsil o'qing", "saytga o'ting", "hujjatga qarang" dema
+  ✗ Sarlavhada hujjat raqami bo'lmasin
+  ✗ Post to'liq bo'lsin — oxirigacha yozilsin, kesmang
+
+UZUNLIK: 400-600 so'z (to'liq, batafsil yoz — kesmang)
+
+JAVOB FORMATI — faqat sof JSON:
+{"is_relevant": true/false, "post": "to'liq tayyor post matni"}\
+"""
 
 
 class Translator:
-    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile") -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
-        self._model = model
-        logger.info(f"Translator tayyor | Model: {model} | Groq API")
+    def __init__(self, api_key: str, model: str, base_url: str) -> None:
+        self._client  = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._model   = model
+        provider = "Groq" if "groq" in base_url else "OpenAI"
+        logger.info(f"Translator tayyor | {provider} | Model: {model}")
 
-    async def is_relevant(self, text: str) -> bool:
-        try:
-            resp = await self._client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": _RELEVANCE_SYSTEM},
-                    {"role": "user",   "content": text[:800]},
-                ],
-                temperature=0.0,
-                max_tokens=5,
-            )
-            answer = resp.choices[0].message.content.strip().upper()
-            result = "HA" in answer
-            logger.info(f"Relevantlik: {answer} -> {'TEGISHLI' if result else 'SKIP'}")
-            return result
-        except Exception as exc:
-            logger.warning(f"Relevantlik xato: {exc} -- tegishli deb otiladi")
-            return True
+    async def process(
+        self,
+        telegram_text: str,
+        link_content: Optional[str] = None,
+        has_1gz_link: bool = False,
+    ) -> PostResult:
+        hint = "\n[MUHIM: Bu 1gz.uz rasmiy hujjat — ALBATTA tegishli]" if has_1gz_link else ""
 
-    async def create_post(self, telegram_text: str, link_content: Optional[str] = None) -> str:
         if link_content and len(link_content) > 150:
-            prompt = _WITH_LINK.format(
-                telegram_text=telegram_text[:1200],
-                link_content=link_content[:2800],
+            user_content = (
+                f"TELEGRAM POST:{hint}\n{telegram_text[:1200]}\n\n"
+                f"HUJJAT TO'LIQ MATNI (faqat ma'lumot uchun, postda ko'rsatma):\n"
+                f"{link_content[:3000]}"
             )
-            logger.info("Post rejimi: telegram + link mazmuni (link postda yoq)")
         else:
-            prompt = _NO_LINK.format(text=telegram_text[:3000])
-            logger.info("Post rejimi: faqat telegram matni")
+            user_content = f"TELEGRAM POST:{hint}\n{telegram_text[:3000]}"
 
         for attempt in range(1, settings.MAX_RETRIES + 1):
             try:
                 resp = await self._client.chat.completions.create(
                     model=self._model,
                     messages=[
-                        {"role": "system", "content": _POST_SYSTEM},
-                        {"role": "user",   "content": prompt},
+                        {"role": "system", "content": _SYSTEM},
+                        {"role": "user",   "content": user_content},
                     ],
-                    temperature=0.4,
-                    max_tokens=1200,
+                    temperature=0.3,
+                    max_tokens=2000,
+                    response_format={"type": "json_object"},
                 )
-                result = resp.choices[0].message.content.strip()
-                result = _remove_links(result)
-                logger.info(f"Post yaratildi: {len(result)} belgi (urinish {attempt})")
-                return result
+                raw    = resp.choices[0].message.content.strip()
+                result = json.loads(raw)
+
+                is_relevant = bool(result.get("is_relevant", False))
+                post        = str(result.get("post", "")).strip()
+
+                if is_relevant and post:
+                    post = _remove_links(post)
+
+                logger.info(
+                    f"AI: tegishli={is_relevant} | "
+                    f"{'post: ' + str(len(post)) + ' belgi' if is_relevant else 'skip'}"
+                )
+                return PostResult(is_relevant=is_relevant, post=post)
+
+            except json.JSONDecodeError:
+                raw_text = resp.choices[0].message.content if hasattr(resp, "choices") else ""
+                if '"is_relevant": true' in raw_text:
+                    return PostResult(is_relevant=True, post=telegram_text)
+                return PostResult(is_relevant=False, post="")
+
             except Exception as exc:
                 wait = settings.RETRY_DELAY_SECONDS * attempt
-                logger.warning(f"Groq urinish {attempt}/{settings.MAX_RETRIES}: {exc} -- {wait}s")
+                logger.warning(f"AI urinish {attempt}/{settings.MAX_RETRIES}: {exc} — {wait}s")
                 if attempt < settings.MAX_RETRIES:
                     await asyncio.sleep(wait)
 
-        logger.error("Groq xato -- asl matn qaytarildi")
-        return telegram_text
+        logger.error("AI barcha urinishlar xato")
+        return PostResult(is_relevant=False, post="")
 
 
 def _remove_links(text: str) -> str:
+    """Postdan URL va havola qatorlarini tozalaydi."""
     text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"1gz\.uz\S*", "", text, flags=re.IGNORECASE)
     text = re.sub(
-        r"(🔗|📎)?\s*(Batafsil|Manba|Havola|Ko'proq|Qo'shimcha)[:\s].*",
+        r"(🔗|📎)?\s*(Batafsil|Manba|Havola|Ko'proq|Sayt|To'liq)[:\s].*",
         "", text, flags=re.IGNORECASE | re.MULTILINE,
     )
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text
-
-
-def extract_urls(text: str) -> list[str]:
-    return re.compile(r"https?://[^\s\)\]\>\"\']+", re.I).findall(text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()

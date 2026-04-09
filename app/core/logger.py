@@ -1,35 +1,30 @@
 import sys
 from pathlib import Path
 from loguru import logger
-
-ROOT = Path(__file__).resolve().parent.parent.parent
-LOGS_DIR = ROOT / "logs"
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
-LOG_FILE = LOGS_DIR / "pipeline.log"
+from core.config import LOG_DIR
 
 
-def setup_logging(level: str = "INFO") -> None:
+def setup_logging():
+    """Logging sozlamalari"""
+    log_file = LOG_DIR / "pipeline.log"
+
     logger.remove()
 
+    # Console
     logger.add(
         sys.stdout,
-        level=level,
-        colorize=True,
-        format=(
-            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-            "<level>{level:<8}</level> | "
-            "<cyan>{name}</cyan>:<cyan>{line}</cyan> — "
-            "<level>{message}</level>"
-        ),
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan> | <level>{message}</level>",
+        level="INFO"
     )
 
+    # File
     logger.add(
-        str(LOG_FILE),
-        level=level,
+        log_file,
         rotation="10 MB",
         retention="7 days",
-        compression="zip",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name}:{line} — {message}",
+        compression="gz",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+        level="DEBUG"
     )
 
-    logger.info(f"✅ Logging initialized: {LOG_FILE}")
+    logger.info("Logging tizimi ishga tushdi")

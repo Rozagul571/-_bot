@@ -25,4 +25,8 @@ ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Tashkent
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import sqlite3; sqlite3.connect('/app/data/pipeline.db')" || exit 1
+
 CMD ["python", "app/main.py"]
