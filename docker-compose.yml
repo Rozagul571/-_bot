@@ -19,7 +19,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # Memory limit (3.8GB server uchun)
     deploy:
       resources:
         limits:
