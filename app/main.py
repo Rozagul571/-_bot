@@ -41,7 +41,8 @@ def build_pipeline():
 async def main() -> None:
     logger.info("=" * 52)
     logger.info("  TENDERZON — Qonunchilik Yangiliklari")
-    logger.info(f"  Manba  : @{settings.SOURCE_CHANNEL}")
+    channel_name = settings.SOURCE_CHANNELS[0] if settings.SOURCE_CHANNELS else "unknown"
+    logger.info(f"  Manba  : @{channel_name}")
     logger.info(f"  Manzil : {settings.TARGET_CHANNEL}")
     logger.info(f"  Model  : {settings.AI_MODEL}")
     logger.info("=" * 52)

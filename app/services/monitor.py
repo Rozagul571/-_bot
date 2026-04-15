@@ -1,8 +1,8 @@
 """
-monitor.py — Real-time listener.
-1gz.uz/#/document linkli postlar — AVTOMATIK tegishli.
+monitor.py — Real-time listener. Auto-reconnect on network errors.
 """
 
+import asyncio
 import re
 from typing import Optional
 
@@ -22,14 +22,18 @@ OFFICIAL_DOMAIN = "1gz.uz"
 
 class ChannelMonitor:
     def __init__(self, db: Database, translator: Translator, poster: ChannelPoster) -> None:
-        self._db = db
+        self._db         = db
         self._translator = translator
-        self._poster = poster
+        self._poster     = poster
 
         self._client = TelegramClient(
             session=settings.user_session(),
             api_id=settings.TELEGRAM_API_ID,
             api_hash=settings.TELEGRAM_API_HASH,
+            connection_retries=10,
+            retry_delay=5,
+            auto_reconnect=True,
+            request_retries=5,
         )
 
     async def start(self) -> None:
@@ -42,16 +46,32 @@ class ChannelMonitor:
             await self._client.disconnect()
 
     async def run(self) -> None:
+        while True:
+            try:
+                await self._connect_and_listen()
+            except (ConnectionError, OSError) as exc:
+                logger.warning(f"Ulanish uzildi: {exc} — 30s dan keyin qayta urinish...")
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error(f"Kutilmagan xato: {exc} — 15s kutish...")
+                await asyncio.sleep(15)
+
+    async def _connect_and_listen(self) -> None:
         await self.start()
         stats = await self._db.get_stats()
         logger.info(f"DB holati: {stats}")
 
-        @self._client.on(events.NewMessage(chats=settings.SOURCE_CHANNEL))
+        # SOURCE_CHANNELS dan birinchi kanalni olish (hozircha bitta)
+        channel = settings.SOURCE_CHANNELS[0] if settings.SOURCE_CHANNELS else "goszakupki_uz"
+
+        @self._client.on(events.NewMessage(chats=channel))
         async def on_new_post(event: events.NewMessage.Event) -> None:
             logger.info(f"⚡ Yangi post: #{event.message.id}")
             await self._handle(event.message)
 
-        logger.info(f"✅ Listening: @{settings.SOURCE_CHANNEL}")
+        logger.info(f"✅ Listening: {channel}")
         logger.info("Yangi post kelganda bir marta ishlaydi...")
         await self._client.run_until_disconnected()
 
@@ -60,7 +80,6 @@ class ChannelMonitor:
         text = _get_text(msg)
         link = _get_link(msg)
 
-        # 1gz.uz rasmiy hujjat havolasimi?
         is_official = bool(link and OFFICIAL_DOMAIN in link and "/document" in link)
 
         logger.info(
@@ -69,29 +88,25 @@ class ChannelMonitor:
             f"rasmiy={'ha' if is_official else 'yoq'}"
         )
 
-        # 1. Dublikat
         if await self._db.is_processed(mid):
             logger.info(f"#{mid} allaqachon ishlangan — skip")
             return
 
-        # 2. Juda qisqa (faqat link ham yo'q bo'lsa)
         if len(text.strip()) < MIN_TEXT_LENGTH and not link:
             logger.info(f"#{mid} juda qisqa — skip")
             await self._db.save(
-                message_id=mid, channel=settings.SOURCE_CHANNEL,
+                message_id=mid, channel=settings.SOURCE_CHANNELS[0] if settings.SOURCE_CHANNELS else "unknown",
                 original_text=text, is_relevant=False, skip_reason="qisqa",
             )
             return
 
-        # 3. Link mazmunini o'qi
         link_content: Optional[str] = None
         if link:
-            logger.info(f"#{mid} link o'qilmoqda: {link[:70]}")
+            logger.info(f"#{mid} link o'qilmoqda...")
             link_content = await fetch_url_content(link)
             if link_content:
-                logger.info(f"#{mid} link mazmuni: {len(link_content)} belgi")
+                logger.info(f"#{mid} link: {len(link_content)} belgi")
 
-        # 4. AI: bitta so'rov — tekshiruv + post
         logger.info(f"#{mid} AI ga yuborilmoqda...")
         result = await self._translator.process(
             telegram_text=text,
@@ -99,32 +114,28 @@ class ChannelMonitor:
             has_1gz_link=is_official,
         )
 
-        # 5. Tegishli emas
         if not result["is_relevant"]:
             logger.info(f"#{mid} AI: tegishli emas — skip")
             await self._db.save(
-                message_id=mid, channel=settings.SOURCE_CHANNEL,
+                message_id=mid, channel=settings.SOURCE_CHANNELS[0] if settings.SOURCE_CHANNELS else "unknown",
                 original_text=text, is_relevant=False, skip_reason="ai_skip",
             )
             return
 
-        # 6. Post bo'sh
         post_text = result["post"]
         if not post_text:
             logger.warning(f"#{mid} AI post bo'sh")
             await self._db.save(
-                message_id=mid, channel=settings.SOURCE_CHANNEL,
+                message_id=mid, channel=settings.SOURCE_CHANNELS[0] if settings.SOURCE_CHANNELS else "unknown",
                 original_text=text, error="ai_post_empty",
             )
             return
 
-        # 7. Kanalga yubor
         posted: bool = await self._poster.post(post_text)
 
-        # 8. DB saqlash
         await self._db.save(
             message_id=mid,
-            channel=settings.SOURCE_CHANNEL,
+            channel=settings.SOURCE_CHANNELS[0] if settings.SOURCE_CHANNELS else "unknown",
             original_text=text,
             translated_text=post_text,
             is_relevant=True,

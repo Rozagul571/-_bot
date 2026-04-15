@@ -1,7 +1,5 @@
 """
-translator.py — Bitta AI so'rovda:
-  1. Post normativ-huquqiy hujjatga tegishlimi?
-  2. Tegishli bo'lsa — to'liq, batafsil, professional o'zbek post yarat
+translator.py — Professional post + to'g'ri manba izohi
 """
 
 import asyncio
@@ -58,15 +56,15 @@ SARLAVHA QOIDASI:
 
 POST TUZILMASI (MAJBURIY, shu tartibda):
 
-  🔥 [Diqqat tortadigan sarlavha — faqat mavzu, raqam yo'q]
+🔥 [Diqqat tortadigan sarlavha — faqat mavzu, raqam yo'q]
 
-  [Qanday yangilik joriy qilindi — 2-3 gap, oddiy til]
+[Qanday yangilik joriy qilindi — 2-3 gap, oddiy til]
 
-  ⚖️ Avval qanday edi?
-  [Ilgari qanday tartib bo'lganligi — 2-3 gap]
+⚖️ Avval qanday edi?
+  [Ilgari qanday tartib bo'lganligi — 1-2.5 gap]
 
-  📋 Endi nima o'zgardi?
-  [Yangi tartib, qoidalar, majburiyatlar — 3-4 gap]
+📋 Hozir qanday o'zgardi?
+  [Yangi tartib, qoidalar, majburiyatlar — 2 gap]
 
   🔢 Qadam-baqadam jarayon:
   1. [Birinchi qadam]
@@ -75,20 +73,11 @@ POST TUZILMASI (MAJBURIY, shu tartibda):
   (kerak bo'lsa davom ettir)
 
   ❓ Nima uchun bu qoida kiritildi?
-  [Davlat maqsadi va sababi — 2-3 gap]
+  [Davlat maqsadi va sababi — 2-1 gap]
 
   👥 Kim rioya qilishi shart?
-  [Aniq ro'yxat: tashkilotlar, mansabdorlar, fuqarolar]
-
-  ⚠️ Buzilsa nima bo'ladi?
-  [Jarima, oqibat, xavflar — 2-3 gap]
-
-  💡 Amaliy maslahat:
-  [Mutaxassislarga aniq ko'rsatma — 2-3 gap]
-
-  📌 Xulosa:
-  [Qisqa yakunlovchi fikr — 1-2 gap]
-
+  
+  
   🗓 [Hujjat nomi va raqami] | Kuchga kirdi: [sana]
 
 TIL QOIDALARI (MAJBURIY):
@@ -100,22 +89,26 @@ TIL QOIDALARI (MAJBURIY):
            buyurtmachi, yetkazib beruvchi, shartnoma, tashkilot, fuqaro.
 
 QATTIQ TAQIQLAR:
-  ✗ Sayt nomi, URL, havola, 1gz.uz — hech qanday veb manzil qo'shma
-  ✗ "Batafsil o'qing", "saytga o'ting", "hujjatga qarang" dema
-  ✗ Sarlavhada hujjat raqami bo'lmasin
+  ✗ 1gz.uz — shu saytni nomini qo'yma boshqa foydaalanganiningni aniq qilib ishlaydiganini qo'yaver. 
   ✗ Post to'liq bo'lsin — oxirigacha yozilsin, kesmang
+  [Aniq ro'yxat: tashkilotlar, mansabdorlar, fuqarolarprofessional va batafsil yoz (200–250 so'z).
 
-UZUNLIK: 400-600 so'z (to'liq, batafsil yoz — kesmang)
 
-JAVOB FORMATI — faqat sof JSON:
-{"is_relevant": true/false, "post": "to'liq tayyor post matni"}\
+QOIDALAR:
+# - Agar postda raqamlari va yili bo'lsa shu malumotlara kelib chiqb  link sifatida o'zing foydalangan saytni ni yozib qo'y bu qonun qayerda chop etilganini user isbot sifatida ko'rishi kerak 
+- Boshqa postlarda faqat post mazmuniga mos keladigan haqiqiy ishlaydigan link qo'y.
+- Hech qachon 404 beradigan yoki mavzuga mos kelmaydigan link qo'yma.
+- "Taqiqlandi", "to'xtatildi", "spravka" kabi so'zlarni o'zingdan qo'shma.
+
+JAVOB — FAQAT SOF JSON:
+{"is_relevant": true/false, "post": "to'liq tayyor post matni"}
 """
 
 
 class Translator:
     def __init__(self, api_key: str, model: str, base_url: str) -> None:
-        self._client  = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        self._model   = model
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._model = model
         provider = "Groq" if "groq" in base_url else "OpenAI"
         logger.info(f"Translator tayyor | {provider} | Model: {model}")
 
@@ -125,16 +118,18 @@ class Translator:
         link_content: Optional[str] = None,
         has_1gz_link: bool = False,
     ) -> PostResult:
-        hint = "\n[MUHIM: Bu 1gz.uz rasmiy hujjat — ALBATTA tegishli]" if has_1gz_link else ""
+
+#         hint = """
+# """
 
         if link_content and len(link_content) > 150:
             user_content = (
-                f"TELEGRAM POST:{hint}\n{telegram_text[:1200]}\n\n"
-                f"HUJJAT TO'LIQ MATNI (faqat ma'lumot uchun, postda ko'rsatma):\n"
-                f"{link_content[:3000]}"
+                # f"TELEGRAM POST:{hint}\n\n"
+                f"ASLIY MATN:\n{telegram_text[:1500]}\n\n"
+                f"HUJJAT MATNI:\n{link_content[:3500]}"
             )
         else:
-            user_content = f"TELEGRAM POST:{hint}\n{telegram_text[:3000]}"
+            user_content = f"TELEGRAM POST:ASLIY MATN:\n{telegram_text[:4000]}"
 
         for attempt in range(1, settings.MAX_RETRIES + 1):
             try:
@@ -142,49 +137,31 @@ class Translator:
                     model=self._model,
                     messages=[
                         {"role": "system", "content": _SYSTEM},
-                        {"role": "user",   "content": user_content},
+                        {"role": "user", "content": user_content},
                     ],
                     temperature=0.3,
-                    max_tokens=2000,
+                    max_tokens=2200,
                     response_format={"type": "json_object"},
                 )
-                raw    = resp.choices[0].message.content.strip()
+                raw = resp.choices[0].message.content.strip()
                 result = json.loads(raw)
 
                 is_relevant = bool(result.get("is_relevant", False))
-                post        = str(result.get("post", "")).strip()
+                post = str(result.get("post", "")).strip()
 
                 if is_relevant and post:
-                    post = _remove_links(post)
+                    post = _clean_post(post)
 
-                logger.info(
-                    f"AI: tegishli={is_relevant} | "
-                    f"{'post: ' + str(len(post)) + ' belgi' if is_relevant else 'skip'}"
-                )
                 return PostResult(is_relevant=is_relevant, post=post)
 
-            except json.JSONDecodeError:
-                raw_text = resp.choices[0].message.content if hasattr(resp, "choices") else ""
-                if '"is_relevant": true' in raw_text:
-                    return PostResult(is_relevant=True, post=telegram_text)
-                return PostResult(is_relevant=False, post="")
-
             except Exception as exc:
-                wait = settings.RETRY_DELAY_SECONDS * attempt
-                logger.warning(f"AI urinish {attempt}/{settings.MAX_RETRIES}: {exc} — {wait}s")
+                logger.warning(f"AI urinish {attempt}: {exc}")
                 if attempt < settings.MAX_RETRIES:
-                    await asyncio.sleep(wait)
+                    await asyncio.sleep(settings.RETRY_DELAY_SECONDS)
 
-        logger.error("AI barcha urinishlar xato")
         return PostResult(is_relevant=False, post="")
 
 
-def _remove_links(text: str) -> str:
-    """Postdan URL va havola qatorlarini tozalaydi."""
-    text = re.sub(r"https?://\S+", "", text)
-    text = re.sub(r"1gz\.uz\S*", "", text, flags=re.IGNORECASE)
-    text = re.sub(
-        r"(🔗|📎)?\s*(Batafsil|Manba|Havola|Ko'proq|Sayt|To'liq)[:\s].*",
-        "", text, flags=re.IGNORECASE | re.MULTILINE,
-    )
+def _clean_post(text: str) -> str:
+    text = re.sub(r"https?://1gz\.uz\S*", "", text, flags=re.IGNORECASE)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
